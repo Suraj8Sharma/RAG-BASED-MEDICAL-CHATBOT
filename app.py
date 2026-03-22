@@ -12,7 +12,6 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 import requests
 
-
 app=FastAPI()
 
 load_dotenv()
@@ -22,27 +21,40 @@ GOOGLE_API_KEY=os.environ.get("GOOGLE_API_KEY")
 os.environ["PINECONE_API_KEY"]=PINECONE_API_KEY
 os.environ["GOOGLE_API_KEY"]=GOOGLE_API_KEY
 
-#loading the embedding model
-embeddings=download_embeddings()
-index_name="medical-chatbot"
+# --- LAZY LOADING SETUP START ---
+# 1. Create a global variable starting as None
+rag_chain = None
 
-#making my retriever
-docsearch=PineconeVectorStore.from_existing_index(
-    embedding=embeddings,
-    index_name=index_name
-)
+# 2. Wrap your exact AI logic in a function
+def get_rag_chain():
+    global rag_chain
+    if rag_chain is None:
+        print("Downloading embeddings and initializing models...")
+        
+        #loading the embedding model
+        embeddings=download_embeddings()
+        index_name="medical-chatbot"
 
-retriever=docsearch.as_retriever(search_type="similarity",search_kwargs={"k":3})
+        #making my retriever
+        docsearch=PineconeVectorStore.from_existing_index(
+            embedding=embeddings,
+            index_name=index_name
+        )
 
-chatmodel=ChatGoogleGenerativeAI(model="gemini-2.5-flash")
-prompt=ChatPromptTemplate.from_messages([
-    ("system",system_prompt),
-    ("human","{input}"),
-])
+        retriever=docsearch.as_retriever(search_type="similarity",search_kwargs={"k":3})
 
-#making the chains
-questions_answer_chain=create_stuff_documents_chain(chatmodel,prompt)
-rag_chain=create_retrieval_chain(retriever,questions_answer_chain)
+        chatmodel=ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+        prompt=ChatPromptTemplate.from_messages([
+            ("system",system_prompt),
+            ("human","{input}"),
+        ])
+
+        #making the chains
+        questions_answer_chain=create_stuff_documents_chain(chatmodel,prompt)
+        rag_chain=create_retrieval_chain(retriever,questions_answer_chain)
+        
+    return rag_chain
+# --- LAZY LOADING SETUP END ---
 
 
 #defining where to look for the html and css files
@@ -53,10 +65,11 @@ templates = Jinja2Templates(directory="templates")
 def index(request:Request):
     return templates.TemplateResponse("chat.html", {"request": request})
 
-
 @app.post("/msg")
 def chat(msg:str=Form(...)):
+    # 3. Call the function here. It will only download on the very first message!
+    chain = get_rag_chain()
     
-    response=rag_chain.invoke({"input":msg})
+    response=chain.invoke({"input":msg})
     print("Response : ",response["answer"] )
     return str(response["answer"])
