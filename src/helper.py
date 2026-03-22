@@ -5,7 +5,8 @@ from dotenv import load_dotenv
 from typing import List
 from langchain.schema import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEndpointEmbeddings
+import os 
 
 #---------------------------
 #1)
@@ -50,9 +51,9 @@ def download_embeddings():
     model_name = "sentence-transformers/all-MiniLM-L6-v2"
     
   
-
-    embeddings = HuggingFaceEmbeddings(
-        model_name=model_name,
-        
+    embeddings = HuggingFaceEndpointEmbeddings(
+        model="sentence-transformers/all-MiniLM-L6-v2",
+        task="feature-extraction",
+        huggingfacehub_api_token=os.environ.get("HUGGINGFACEHUB_API_TOKEN")
     )
     return embeddings

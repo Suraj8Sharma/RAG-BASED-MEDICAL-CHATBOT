@@ -1,75 +1,63 @@
-from src.helper import download_embeddings
+import os
+from fastapi import FastAPI, Request, Form
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
+from dotenv import load_dotenv
+
 from langchain_pinecone import PineconeVectorStore
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
-from dotenv import load_dotenv
-from src.prompt import *
-import os 
-from fastapi import FastAPI,Request,Form
-from fastapi.templating import Jinja2Templates
-from fastapi.staticfiles import StaticFiles
-import requests
 
-app=FastAPI()
+from src.helper import download_embeddings
+from src.prompt import system_prompt
+
+app = FastAPI()
 
 load_dotenv()
-PINECONE_API_KEY=os.environ.get("PINECONE_API_KEY")
-GOOGLE_API_KEY=os.environ.get("GOOGLE_API_KEY")
+# Ensure these are set in Render Environment Variables
+PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+HUGGINGFACEHUB_API_TOKEN = os.environ.get("HUGGINGFACEHUB_API_TOKEN")
 
-os.environ["PINECONE_API_KEY"]=PINECONE_API_KEY
-os.environ["GOOGLE_API_KEY"]=GOOGLE_API_KEY
+os.environ["PINECONE_API_KEY"] = PINECONE_API_KEY
+os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
+os.environ["HUGGINGFACEHUB_API_TOKEN"] = HUGGINGFACEHUB_API_TOKEN
 
-# --- LAZY LOADING SETUP START ---
-# 1. Create a global variable starting as None
-rag_chain = None
+# 1. Initialize Embeddings (API-based, so this is now very fast)
+embeddings = download_embeddings()
+index_name = "medical-chatbot"
 
-# 2. Wrap your exact AI logic in a function
-def get_rag_chain():
-    global rag_chain
-    if rag_chain is None:
-        print("Downloading embeddings and initializing models...")
-        
-        #loading the embedding model
-        embeddings=download_embeddings()
-        index_name="medical-chatbot"
+# 2. Setup Vector Store & Retriever
+docsearch = PineconeVectorStore.from_existing_index(
+    embedding=embeddings,
+    index_name=index_name
+)
 
-        #making my retriever
-        docsearch=PineconeVectorStore.from_existing_index(
-            embedding=embeddings,
-            index_name=index_name
-        )
+retriever = docsearch.as_retriever(search_type="similarity", search_kwargs={"k": 3})
 
-        retriever=docsearch.as_retriever(search_type="similarity",search_kwargs={"k":3})
+# 3. Setup Chat Model & Chain
+chatmodel = ChatGoogleGenerativeAI(model="gemini-1.5-flash") # Using stable flash model
+prompt = ChatPromptTemplate.from_messages([
+    ("system", system_prompt),
+    ("human", "{input}"),
+])
 
-        chatmodel=ChatGoogleGenerativeAI(model="gemini-2.5-flash")
-        prompt=ChatPromptTemplate.from_messages([
-            ("system",system_prompt),
-            ("human","{input}"),
-        ])
+questions_answer_chain = create_stuff_documents_chain(chatmodel, prompt)
+rag_chain = create_retrieval_chain(retriever, questions_answer_chain)
 
-        #making the chains
-        questions_answer_chain=create_stuff_documents_chain(chatmodel,prompt)
-        rag_chain=create_retrieval_chain(retriever,questions_answer_chain)
-        
-    return rag_chain
-# --- LAZY LOADING SETUP END ---
-
-
-#defining where to look for the html and css files
+# 4. Static & Templates
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 @app.get("/")
-def index(request:Request):
+def index(request: Request):
     return templates.TemplateResponse("chat.html", {"request": request})
 
 @app.post("/msg")
-def chat(msg:str=Form(...)):
-    # 3. Call the function here. It will only download on the very first message!
-    chain = get_rag_chain()
-    
-    response=chain.invoke({"input":msg})
-    print("Response : ",response["answer"] )
+def chat(msg: str = Form(...)):
+    # No more lazy loading function call needed!
+    response = rag_chain.invoke({"input": msg})
+    print("Response : ", response["answer"])
     return str(response["answer"])
